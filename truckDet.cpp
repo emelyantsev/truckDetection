@@ -1,242 +1,204 @@
 
-
 #include <opencv2/dnn.hpp>
 #include <opencv2/dnn/shape_utils.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
-#include <fstream>
-#include <iostream>
-#include <algorithm>
-#include <cstdlib>
-#include <chrono>
-#include <ctime>
-#include <iostream>
-#include <iomanip>
-#include <thread>
-#include <mutex>
-#include <atomic>
 
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <chrono>
 
 using namespace std;
 using namespace cv;
 using namespace cv::dnn;
 
-
-static const char* classNames[] = { "background",
+const char * classNames[] = { "background",
 "aeroplane", "bicycle", "bird", "boat",
 "bottle", "bus", "car", "cat", "chair",
 "cow", "diningtable", "dog", "horse",
 "motorbike", "person", "pottedplant",
 "sheep", "sofa", "train", "tvmonitor" };
 
-//read-mage cam_test modion detect
-struct ObjTypePeopleDetect
-{
-    //person-car
-    string type_object;
-    cv::Rect rect_object;
-};
 
-static vector<Mat> camera1;
-//static vector<Mat> camera2;
-static mutex mutex_camera1;
-//static mutex mutex_camera2;
+const string CAMERA_PATH_1 = "rtsp://admin:Freedom!00##@192.168.106.20:554/h264/ch1/sub/av_stream" ;
+const string FTP_PATH = "/home/roniinx/ftp/truckArchive/" ;
+const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt" ;
+const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel" ;
+const double CONFIDENCE_THRESHOLD = 0.75;
 
 
+queue<Mat> camera1;
+mutex mutex_camera1;
 
-Mat GetMatCamera(int cam_id)
-{
-    if (cam_id == 1)
-    {
-        if (camera1.size() > 0)
-        {
-            //cout << "size1:" << camera1.size() << endl;
-            mutex_camera1.lock();
-            Mat ret_mat = camera1.front().clone();
-            if (camera1.size() > 10)
-            {
-                camera1.clear();
-            }
-            mutex_camera1.unlock();
-            return ret_mat;
-        }
-        else return Mat();
-    }
-    else return Mat();
- /*   else if (cam_id == 2)
-    {
-        if (camera2.size() > 0)
-        {
-            cout << "size2:" << camera2.size() << endl;
-            mutex_camera2.lock();
-            Mat ret_mat = camera2.front().clone();
-            if (camera2.size() > 10)
-            {
-                camera2.clear();
-            }
-            mutex_camera2.unlock();
 
-            return ret_mat;
-        }
-    }*/
+Mat GetMatCamera(int cam_id) {
+
+	if (cam_id == 1) {
+
+		mutex_camera1.lock();
+
+		if ( camera1.size() > 0 ) {
+
+			Mat ret_mat = camera1.front().clone();
+
+			while ( !camera1.empty() ) {
+				camera1.pop();
+			}
+
+			mutex_camera1.unlock();
+			return ret_mat;
+		}
+		else {
+
+			mutex_camera1.unlock();
+			return Mat();
+		}
+	}
+
+	return Mat();
 }
 
 void ConnectCamera(string path, int cam_id)
 {
-    int badFrameCounter = 0;
-    VideoCapture cap;
-    cap = VideoCapture(path);
+	int badFrameCounter = 0;
 
-    if (!cap.isOpened())
-    {
-        return;
-    }
+	VideoCapture cap;
+	cap = VideoCapture(path);
 
-    while (true)
-    {
-        Mat frame;
-        cap >> frame;
-        //cout << "gotFrame " << frame.rows << " " << frame.cols<< "\n";
-        if (!frame.data)
-        {
-            badFrameCounter++;
-            if(badFrameCounter > 5){
-                badFrameCounter = 0;
-                cap.release();
-                cap = VideoCapture(path);
-                if (!cap.isOpened())
-                {
-                    return;
-                }
-            }
-             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-        badFrameCounter = 0;
-        if (cam_id == 1)
-        {
+	while (!cap.isOpened()) {
+		std::this_thread::sleep_for(std::chrono::seconds(600));
+		cap = VideoCapture(path);
+	}
 
-                mutex_camera1.lock();
-                camera1.push_back(frame);
-                mutex_camera1.unlock();
+	while (true) {
 
+		Mat frame;
+		cap >> frame;
 
-        }
-     /*   else if (cam_id == 2)
-        {
+		if (!frame.data) {
 
-            mutex_camera2.lock();
-            camera2.push_back(frame);
-            mutex_camera2.unlock();
+			badFrameCounter++;
 
-        }*/
+			if (badFrameCounter > 5) {
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+				badFrameCounter = 0;
+				cap.release();
+
+				cap = VideoCapture(path);
+
+				while (!cap.isOpened()) {
+					std::this_thread::sleep_for(std::chrono::seconds(600));
+					cap = VideoCapture(path);
+				}
+	
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			continue;
+		}
+
+		badFrameCounter = 0;
+
+		if (cam_id == 1) {
+
+			mutex_camera1.lock();
+			camera1.push(frame);
+			mutex_camera1.unlock();
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
 }
 
-void DetectCar(int cam_id)
-{
-    String modelConfiguration = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt";
-    String modelBinary = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel";
-    dnn::Net net = readNetFromCaffe(modelConfiguration, modelBinary);
 
-    string name_cam = "Plate_" + to_string(cam_id);
-    //namedWindow(name_cam);
-    long lastWritten = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    while (1)
-    {
-        Mat frame = GetMatCamera(cam_id);
-        if (!frame.data)
-        {
-            // << "frame empty \n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            continue;
+void DetectCar(int cam_id) {
 
-        }
-           // cout << "frame NOTempty " << frame.rows << " " << frame.cols<< "\n";
+	String modelConfiguration = MODEL_CONFIG;
+	String modelBinary = MODEL_BINARY;
 
-        frame = frame(Rect(0, frame.rows/5,frame.cols - 1, frame.rows *4/5 -1));
-        Mat frame1 = frame.clone();
+	dnn::Net net = readNetFromCaffe(modelConfiguration, modelBinary);
 
-        //cout << "frame resized \n";
-        Mat inputBlob = blobFromImage(frame, 1 / 255.F,
-            Size(180, 180),
-            Scalar(127, 127, 127),
-            true, false);
+	int lastWritten = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-    //cout << "BLOB DONE \n";
-        net.setInput(inputBlob);
+	while (true) {
 
-        Mat detection = net.forward();
+		Mat frame = GetMatCamera(cam_id);
+
+		if (!frame.data) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			continue;
+		}
 
 
-        Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
+		Mat inputBlob = blobFromImage(frame, 1 / 255.F,
+										Size(300, 300),
+										Scalar(127, 127, 127),
+										true, false);
+
+		net.setInput(inputBlob);
+
+		//double t = (double) getTickCount() ;
+
+		Mat detection = net.forward();
+
+		//t = ((double) getTickCount() - t) / getTickFrequency();
+		//cout << "time elapsed = " << t << endl;
 
 
-        float confidenceThreshold = 0.5;//0.2
-        for (int i = 0; i < detectionMat.rows; i++)
-        {
-            float confidence = detectionMat.at<float>(i, 2);
-            size_t objectClass = (size_t)(detectionMat.at<float>(i, 1));
-            if (classNames[objectClass] == "bus" || classNames[objectClass] == "car")
-            {
-                //cout << "conf " << classNames[objectClass] << " " << confidence << "\n";
-                if (confidence > confidenceThreshold)
-                {
-                    //size_t objectClass = (size_t)(detectionMat.at<float>(i, 1));
+		Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
 
-                    int left = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
-                    int top = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
-                    int right = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
-                    int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+		float confidenceThreshold = CONFIDENCE_THRESHOLD;
 
-                    rectangle(frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 5);
-                    long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    if(lastWritten - now > 3000){
-                        lastWritten = now;
-                        string filenameToRecord1 = "/home/roniinx/ftp/bagArchive/" + to_string(now) + "�ar.jpg";
-                        cv::imwrite(filenameToRecord1, frame);
-                    }
-                }
-            }
-        }
+		for (int i = 0; i < detectionMat.rows; i++) {
+
+			size_t objectClass = (size_t) detectionMat.at<float>(i, 1);
+			
+			float confidence = detectionMat.at<float>(i, 2);
+			
+			if (classNames[objectClass] == "bus" || classNames[objectClass] == "car") {
+
+				if (confidence > confidenceThreshold) {
+
+					int left = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
+					int top = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
+					int right = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
+					int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+
+					rectangle(frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 5);
 
 
-        /*cv::imshow(name_cam, frame);
-        waitKey(500);*/
-    }
-}
-
-int main()
-{
+					int now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 
-    //cout << "gggggg";
-    thread thread_camera_1 = thread(ConnectCamera, "rtsp://admin:Freedom!00##@192.168.106.20:554/h264/ch1/sub/av_stream", 1);
-    thread_camera_1.detach();
+					if (now - lastWritten > 30) {
 
-    //thread thread_camera_2 = thread(ConnectCamera, "rtsp://admin:Freedom!00##@192.168.104.20:554/h264/ch1/sub/av_stream", 2);
-    //thread_camera_2.detach();
+						lastWritten = now;
+						string filenameToRecord = FTP_PATH + to_string(now) + string(classNames[objectClass]) + string(".jpg");
+						cv::imwrite(filenameToRecord, frame);
+					}
+				}
 
-    thread thread_dnn_1 = thread(DetectCar, 1);
-    thread_dnn_1.detach();
-
-    //thread thread_dnn_2 = thread(DetectCar, 2);
-    //thread_dnn_2.detach();
-
-
-
-
-    for (;;)
-    {
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(15000));
-
-    }
-
+			}
+		}
+	}
 
 }
 
 
 
+int main() {
+
+	thread thread_camera_1 = thread(ConnectCamera, CAMERA_PATH_1, 1);
+	thread_camera_1.detach();
+
+	thread thread_dnn_1 = thread(DetectCar, 1);
+	thread_dnn_1.detach();
+
+
+	while (true) {
+
+		this_thread::sleep_for(chrono::seconds(60));
+	}
+
+	return 0;
+}
