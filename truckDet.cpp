@@ -26,7 +26,18 @@ const string FTP_PATH = "/home/roniinx/ftp/truckArchive/" ;
 const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt" ;
 const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel" ;
 const double CONFIDENCE_THRESHOLD = 0.75;
+const bool USE_ROI = false;
 
+
+//  ROI - fraction of input Mat 
+struct ROI_rectangle {
+	double dx;
+	double dy;
+	double lx;
+	double ly;
+};
+
+const ROI_rectangle ROI_RECT{ 0.54, 0.46, 0, 0.625 };
 
 queue<Mat> camera1;
 mutex mutex_camera1;
@@ -129,20 +140,32 @@ void DetectCar(int cam_id) {
 			continue;
 		}
 
+		Mat roi_frame = frame;
 
-		Mat inputBlob = blobFromImage(frame, 1 / 255.F,
-										Size(300, 300),
-										Scalar(127, 127, 127),
-										true, false);
+		if (USE_ROI) {
+
+			roi_frame = frame(Rect(frame.cols * ROI_RECT.dx, frame.rows * ROI_RECT.dy, frame.cols * ROI_RECT.lx, frame.rows * ROI_RECT.ly));
+
+			rectangle(frame, Rect(frame.cols * ROI_RECT.dx, frame.rows * ROI_RECT.dy, frame.cols * ROI_RECT.lx, frame.rows * ROI_RECT.ly),
+				Scalar(0, 255, 255), 1);
+
+			putText(frame, "ROI", Point{ (int)(frame.cols * ROI_RECT.dx), (int)(frame.rows * ROI_RECT.dy) }, FONT_HERSHEY_SIMPLEX, 0.5, Scalar(0, 255, 255), 2);
+		}
+
+
+		Mat inputBlob = blobFromImage(roi_frame, 1 / 255.F,
+			Size(300, 300),
+			Scalar(127, 127, 127),
+			true, false);
 
 		net.setInput(inputBlob);
 
-		//double t = (double) getTickCount() ;
+	//	double t = (double)getTickCount();
 
 		Mat detection = net.forward();
 
-		//t = ((double) getTickCount() - t) / getTickFrequency();
-		//cout << "time elapsed = " << t << endl;
+	//	t = ((double)getTickCount() - t) / getTickFrequency();
+	//	cout << "time elapsed = " << t << endl;
 
 
 		Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
@@ -151,20 +174,20 @@ void DetectCar(int cam_id) {
 
 		for (int i = 0; i < detectionMat.rows; i++) {
 
-			size_t objectClass = (size_t) detectionMat.at<float>(i, 1);
-			
+			size_t objectClass = (size_t)detectionMat.at<float>(i, 1);
+
 			float confidence = detectionMat.at<float>(i, 2);
-			
+
 			if (classNames[objectClass] == "bus" || classNames[objectClass] == "car") {
 
 				if (confidence > confidenceThreshold) {
 
-					int left = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
-					int top = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
-					int right = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
-					int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+					int left = static_cast<int>(detectionMat.at<float>(i, 3) * roi_frame.cols);
+					int top = static_cast<int>(detectionMat.at<float>(i, 4) * roi_frame.rows);
+					int right = static_cast<int>(detectionMat.at<float>(i, 5) * roi_frame.cols);
+					int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * roi_frame.rows);
 
-					rectangle(frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 5);
+					rectangle(roi_frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 5);
 
 
 					int now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -179,11 +202,12 @@ void DetectCar(int cam_id) {
 				}
 
 			}
+
 		}
+
 	}
 
 }
-
 
 
 int main() {
