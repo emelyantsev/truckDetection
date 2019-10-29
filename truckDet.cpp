@@ -22,7 +22,7 @@ const char * classNames[] = { "background",
 
 
 const string CAMERA_PATH_1 = "rtsp://admin:Freedom!00##@192.168.106.20:554/h264/ch1/sub/av_stream" ;
-const string FTP_PATH = "/home/roniinx/ftp/truckArchive/" ;
+const string FTP_PATH = "/home/cam/files/truckArchive/" ;
 const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt" ;
 const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel" ;
 const double CONFIDENCE_THRESHOLD = 0.75;
@@ -37,7 +37,7 @@ struct ROI_rectangle {
 	double ly;
 };
 
-const ROI_rectangle ROI_RECT{ 0.54, 0.46, 0, 0.625 };
+const ROI_rectangle ROI_RECT{ 0.1, 0.1, 0.8, 0.8 };
 
 queue<Mat> camera1;
 mutex mutex_camera1;
@@ -117,7 +117,6 @@ void ConnectCamera(string path, int cam_id)
 			mutex_camera1.unlock();
 		}
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	}
 }
 
