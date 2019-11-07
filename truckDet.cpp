@@ -9,6 +9,8 @@
 #include <thread>
 #include <chrono>
 
+#include <ctime>
+
 using namespace std;
 using namespace cv;
 using namespace cv::dnn;
@@ -22,7 +24,7 @@ const char * classNames[] = { "background",
 
 
 const string CAMERA_PATH_1 = "rtsp://admin:Freedom!00##@192.168.106.20:554/h264/ch1/sub/av_stream" ;
-const string FTP_PATH = "/home/cam/files/truckArchive/" ;
+const string FTP_PATH = "/home/cam/files/" ;
 const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt" ;
 const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel" ;
 const double CONFIDENCE_THRESHOLD = 0.75;
@@ -195,7 +197,12 @@ void DetectCar(int cam_id) {
 					if (now - lastWritten > 30) {
 
 						lastWritten = now;
-						string filenameToRecord = FTP_PATH + to_string(now) + string(classNames[objectClass]) + string(".jpg");
+
+						std::time_t t = std::time(nullptr);
+						char mbstr[100];
+						std::strftime(mbstr, sizeof(mbstr), "%Y%m%d%H%M%S000", std::localtime(&t));
+						string filenameToRecord = FTP_PATH + "A123BC45" + "_" + mbstr + "_" + to_string(cam_id) + ".jpg";
+					
 						cv::imwrite(filenameToRecord, frame);
 					}
 				}
