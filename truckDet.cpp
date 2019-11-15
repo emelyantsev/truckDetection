@@ -3,6 +3,7 @@
 #include <opencv2/dnn/shape_utils.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/objdetect.hpp>
 
 #include <queue>
 #include <mutex>
@@ -10,6 +11,7 @@
 #include <chrono>
 
 #include <ctime>
+#include <algorithm>
 
 using namespace std;
 using namespace cv;
@@ -23,12 +25,16 @@ const char * classNames[] = { "background",
 "sheep", "sofa", "train", "tvmonitor" };
 
 
-const string CAMERA_PATH_1 = "rtsp://admin:Freedom!00##@192.168.106.20:554/h264/ch1/sub/av_stream" ;
-const string FTP_PATH = "/home/cam/files/" ;
-const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.prototxt" ;
-const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/release/SSD/ssd.caffemodel" ;
+const string CAMERA_PATH_0 = "rtsp://admin:Freedom!00##@192.168.101.21:554/ISAPI/Streaming/Channels/101" ;
+const string CAMERA_PATH_1 = "rtsp://admin:Freedom!00##@192.168.101.22:554/ISAPI/Streaming/Channels/101";
+const string FTP_PATH = "/home/cam/files/truckArchive/" ;
+const string MODEL_CONFIG = "/home/roniinx/video_cv/truckDetection/models/SSD/ssd.prototxt" ;
+const string MODEL_BINARY = "/home/roniinx/video_cv/truckDetection/models/SSD/ssd.caffemodel" ;
 const double CONFIDENCE_THRESHOLD = 0.75;
 const bool USE_ROI = false;
+const bool DETECT_PLATE = false;
+const string HAAR_CASCADE_PATH = "/home/roniinx/video_cv/truckDetection/models/haarcascade_russian_plate_number.xml";
+const int DETECTION_PERIOD = 30;
 
 
 //  ROI - fraction of input Mat 
@@ -39,7 +45,10 @@ struct ROI_rectangle {
 	double ly;
 };
 
-const ROI_rectangle ROI_RECT{ 0.1, 0.1, 0.8, 0.8 };
+const ROI_rectangle ROI_RECT{ 0.1, 0.2, 0.8, 0.6 };
+
+queue<Mat> camera0;
+mutex mutex_camera0;
 
 queue<Mat> camera1;
 mutex mutex_camera1;
@@ -47,15 +56,36 @@ mutex mutex_camera1;
 
 Mat GetMatCamera(int cam_id) {
 
-	if (cam_id == 1) {
+	if (cam_id == 0) {
+
+		mutex_camera0.lock();
+
+		if ( camera0.size() > 0 ) {
+
+			Mat ret_mat = camera0.front().clone();
+
+			while ( !camera0.empty() ) {
+				camera0.pop();
+			}
+
+			mutex_camera0.unlock();
+			return ret_mat;
+		}
+		else {
+
+			mutex_camera0.unlock();
+			return Mat();
+		}
+	}
+	else if (cam_id == 1) {
 
 		mutex_camera1.lock();
 
-		if ( camera1.size() > 0 ) {
+		if (camera1.size() > 0) {
 
 			Mat ret_mat = camera1.front().clone();
 
-			while ( !camera1.empty() ) {
+			while (!camera1.empty()) {
 				camera1.pop();
 			}
 
@@ -67,6 +97,7 @@ Mat GetMatCamera(int cam_id) {
 			mutex_camera1.unlock();
 			return Mat();
 		}
+
 	}
 
 	return Mat();
@@ -112,7 +143,14 @@ void ConnectCamera(string path, int cam_id)
 
 		badFrameCounter = 0;
 
-		if (cam_id == 1) {
+
+		if (cam_id == 0) {
+
+			mutex_camera0.lock();
+			camera0.push(frame);
+			mutex_camera0.unlock();
+		}
+		else if (cam_id == 1) {
 
 			mutex_camera1.lock();
 			camera1.push(frame);
@@ -130,7 +168,15 @@ void DetectCar(int cam_id) {
 
 	dnn::Net net = readNetFromCaffe(modelConfiguration, modelBinary);
 
-	int lastWritten = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	cv::CascadeClassifier plateCascade;
+
+	if (!plateCascade.load(HAAR_CASCADE_PATH)) {
+		std::cout << "Error when loading the face cascade classfier!" << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+
+	long long lastWritten = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() - DETECTION_PERIOD;
 
 	while (true) {
 
@@ -161,19 +207,22 @@ void DetectCar(int cam_id) {
 
 		net.setInput(inputBlob);
 
-	//	double t = (double)getTickCount();
+		//double t = (double)getTickCount();
 
 		Mat detection = net.forward();
 
-	//	t = ((double)getTickCount() - t) / getTickFrequency();
-	//	cout << "time elapsed = " << t << endl;
+		//t = ((double)getTickCount() - t) / getTickFrequency();
+		//cout << "net forward time elapsed = " << t << endl;
 
 
 		Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
 
 		float confidenceThreshold = CONFIDENCE_THRESHOLD;
 
-		for (int i = 0; i < detectionMat.rows; i++) {
+		bool is_car_detected = false;
+		bool is_plate_detected = false;
+
+		for (int i = 0; i < detectionMat.rows; ++i) {
 
 			size_t objectClass = (size_t)detectionMat.at<float>(i, 1);
 
@@ -183,32 +232,78 @@ void DetectCar(int cam_id) {
 
 				if (confidence > confidenceThreshold) {
 
+					is_car_detected = true;
+
 					int left = static_cast<int>(detectionMat.at<float>(i, 3) * roi_frame.cols);
 					int top = static_cast<int>(detectionMat.at<float>(i, 4) * roi_frame.rows);
 					int right = static_cast<int>(detectionMat.at<float>(i, 5) * roi_frame.cols);
 					int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * roi_frame.rows);
 
-					rectangle(roi_frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 5);
+					rectangle(roi_frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0), 3);
 
-
-					int now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-
-
-					if (now - lastWritten > 30) {
-
-						lastWritten = now;
-
-						std::time_t t = std::time(nullptr);
-						char mbstr[100];
-						std::strftime(mbstr, sizeof(mbstr), "%Y%m%d%H%M%S000", std::localtime(&t));
-						string filenameToRecord = FTP_PATH + "A123BC45" + "_" + mbstr + "_" + to_string(cam_id) + ".jpg";
 					
-						cv::imwrite(filenameToRecord, frame);
+
+					if (DETECT_PLATE) {
+
+
+						Mat vehicle_frame = roi_frame(
+							Rect(
+								max(0, left),
+								max(0, top),
+								min(right - left, roi_frame.cols - max(0, left)),
+								min(bottom - top, roi_frame.rows - max(0, top))
+							)
+						);
+
+
+						vector<Rect> detections;
+
+						//double t1 = (double)getTickCount();
+
+						plateCascade.detectMultiScale(vehicle_frame,
+							detections,
+							1.1,
+							3);
+
+						//t1 = ((double)getTickCount() - t1) / getTickFrequency();
+						//cout << "detectMultiScale time elapsed = " << t1 << endl;
+
+						if (detections.size() > 0) {
+							is_plate_detected = true;
+						}
+
+						for (int i = 0; i < detections.size(); ++i) {
+							rectangle(vehicle_frame, detections[i], cv::Scalar(0, 0, 255), 2);
+						}
+
 					}
+
+					
+					
+
+
 				}
 
 			}
 
+		}
+
+
+		long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+
+		if (is_car_detected && is_plate_detected && now - lastWritten > DETECTION_PERIOD) {
+
+			lastWritten = now;
+
+			std::time_t t = std::time(nullptr);
+			char mbstr[100];
+			std::strftime(mbstr, sizeof(mbstr), "%Y%m%d%H%M%S000", std::localtime(&t));
+			string filenameToRecord = FTP_PATH + "X555XX55" + "_" + mbstr + "_" + to_string(cam_id) + ".jpg";
+
+			cv::imwrite(filenameToRecord, frame);
+
+			std::this_thread::sleep_for(std::chrono::seconds(DETECTION_PERIOD));
 		}
 
 	}
@@ -218,11 +313,21 @@ void DetectCar(int cam_id) {
 
 int main() {
 
+	thread thread_camera_0 = thread(ConnectCamera, CAMERA_PATH_0, 0);
+	thread_camera_0.detach();
+
+	thread thread_dnn_0 = thread(DetectCar, 0);
+	thread_dnn_0.detach();
+
+	/*
 	thread thread_camera_1 = thread(ConnectCamera, CAMERA_PATH_1, 1);
 	thread_camera_1.detach();
 
 	thread thread_dnn_1 = thread(DetectCar, 1);
 	thread_dnn_1.detach();
+	
+	*/
+
 
 
 	while (true) {
