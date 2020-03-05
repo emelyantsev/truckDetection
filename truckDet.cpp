@@ -292,14 +292,14 @@ void DetectCar(int cam_id) {
 		long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 
-		if (is_car_detected && is_plate_detected && now - lastWritten > DETECTION_PERIOD) {
+		if (is_car_detected && (!DETECT_PLATE || is_plate_detected) && now - lastWritten > DETECTION_PERIOD) {
 
 			lastWritten = now;
 
 			std::time_t t = std::time(nullptr);
 			char mbstr[100];
 			std::strftime(mbstr, sizeof(mbstr), "%Y%m%d%H%M%S000", std::localtime(&t));
-			string filenameToRecord = FTP_PATH + "X555XX55" + "_" + mbstr + "_" + to_string(cam_id) + ".jpg";
+			string filenameToRecord = FTP_PATH + "A100BC50" + "_" + mbstr + "_" + to_string(cam_id) + ".jpg";
 
 			cv::imwrite(filenameToRecord, frame);
 
